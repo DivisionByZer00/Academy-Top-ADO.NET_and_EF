@@ -1,0 +1,395 @@
+using System;
+using System.Collections.Generic;
+using System.IO;
+using Microsoft.Data.Sqlite;
+
+namespace ContactManagerWithAudit
+{
+    
+    public class Contact
+    {
+        public int Id { get; set; }
+        public string FullName { get; set; } = "";
+        public string? Phone { get; set; }
+        public string? Email { get; set; }
+        public string? Department { get; set; }
+    }
+
+    public class AuditLogEntry
+    {
+        public int Id { get; set; }
+        public int ContactId { get; set; }
+        public string ActionName { get; set; } = "";
+        public string Details { get; set; } = "";
+        public string CreatedAt { get; set; } = "";
+    }
+
+    
+    class Program
+    {
+      
+        static readonly string dbPath = Path.Combine(AppContext.BaseDirectory, "contact_manager.db");
+        static readonly string connectionString = $"Data Source={dbPath}";
+
+        static void Main()
+        {
+
+           
+
+            File.Delete(dbPath);
+
+           
+            Console.WriteLine($"Путь к базе данных: {dbPath}");
+            Console.WriteLine(new string('=', 50));
+
+   
+            EnsureDatabase();
+
+      
+            Console.WriteLine("\n[ ИСХОДНЫЙ СПИСОК КОНТАКТОВ ]");
+            PrintContacts(GetAllContacts());
+
+
+            Console.WriteLine("\n[ ДОБАВЛЕНИЕ КОНТАКТА ]");
+            var newContact = new Contact
+            {
+                FullName = "Анна Романова",
+                Phone = "+7 900 777-12-34",
+                Email = "a.romanova@company.local",
+                Department = "Marketing"
+            };
+            int insertedRows = AddContact(newContact);
+            Console.WriteLine($"Добавлено строк: {insertedRows}. Контакт: {newContact.FullName}");
+
+           
+            Console.WriteLine("\n[ ОБНОВЛЕНИЕ КОНТАКТА ]");
+            var contactToUpdate = GetAllContacts().Find(c => c.FullName == "Мария Смирнова");
+            if (contactToUpdate != null)
+            {
+                contactToUpdate.Phone = "+7 900 500-00-00"; 
+                contactToUpdate.Department = "Management";  
+                int updatedRows = UpdateContact(contactToUpdate);
+                Console.WriteLine($"Изменено строк: {updatedRows}. Обновлен контакт: {contactToUpdate.FullName}");
+            }
+            else
+            {
+                Console.WriteLine("Контакт для обновления не найден.");
+            }
+
+          
+            Console.WriteLine("\n[ УДАЛЕНИЕ КОНТАКТА ]");
+            var contactToDelete = GetAllContacts().Find(c => c.FullName == "Павел Миронов");
+            if (contactToDelete != null)
+            {
+                int deletedRows = DeleteContact(contactToDelete.Id);
+                Console.WriteLine($"Удалено строк: {deletedRows}. Удален контакт ID: {contactToDelete.Id}");
+            }
+            else
+            {
+                Console.WriteLine("Контакт для удаления не найден.");
+            }
+
+       
+            Console.WriteLine("\n[ ПОИСК ПО СТРОКЕ 'Иван' ]");
+            PrintContacts(SearchContacts("иван", null));
+
+            Console.WriteLine("\n[ ПОИСК: ОТДЕЛ 'IT' ]");
+            PrintContacts(SearchContacts("", "IT"));
+
+          
+            Console.WriteLine("\n[ ПРОВЕРКА УСПЕШНОЙ ТРАНЗАКЦИИ ]");
+            RunSuccessfulTransaction();
+
+            Console.WriteLine("\n[ ПРОВЕРКА ROLLBACK (ОШИБКА) ]");
+            RunRollbackTransaction();
+
+         
+            Console.WriteLine("\n==================================================");
+            Console.WriteLine("[ ИТОГОВЫЙ СПИСОК КОНТАКТОВ ]");
+            PrintContacts(GetAllContacts());
+
+            Console.WriteLine("\n[ ЖУРНАЛ ДЕЙСТВИЙ (AUDIT LOG) ]");
+            PrintAuditLog(GetAuditLog());
+        }
+
+        
+
+        static void EnsureDatabase()
+        {
+            using var connection = new SqliteConnection(connectionString);
+            connection.Open();
+
+            using var createContactsCommand = connection.CreateCommand();
+            createContactsCommand.CommandText = @"
+                CREATE TABLE IF NOT EXISTS Contacts (
+                    Id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    FullName TEXT NOT NULL,
+                    Phone TEXT NULL,
+                    Email TEXT NULL,
+                    Department TEXT NULL
+                );";
+            createContactsCommand.ExecuteNonQuery();
+
+            using var createAuditCommand = connection.CreateCommand();
+            createAuditCommand.CommandText = @"
+                CREATE TABLE IF NOT EXISTS AuditLog (
+                    Id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    ContactId INTEGER NOT NULL,
+                    ActionName TEXT NOT NULL,
+                    Details TEXT NOT NULL,
+                    CreatedAt TEXT NOT NULL
+                );";
+            createAuditCommand.ExecuteNonQuery();
+
+            using var countCommand = connection.CreateCommand();
+            countCommand.CommandText = "SELECT COUNT(*) FROM Contacts;";
+            long contactsCount = (long)(countCommand.ExecuteScalar() ?? 0L);
+
+
+            if (contactsCount == 0)
+            {
+                using var insertCommand = connection.CreateCommand();
+                insertCommand.CommandText = @"
+                    INSERT INTO Contacts (FullName, Phone, Email, Department) VALUES
+                    ('Иван Петров', '+7 900 123-45-67', 'ivan@company.local', 'IT'),
+                    ('Мария Смирнова', '+7 900 222-11-00', 'maria@company.local', 'HR'),
+                    ('Ольга Соколова', NULL, 'olga@company.local', 'Finance'),        -- Без телефона
+                    ('Павел Миронов', '+7 900 555-44-33', NULL, 'IT'),                -- Без email
+                    ('Дмитрий Волков', '+7 900 666-55-44', 'dmitry@company.local', NULL), -- Без отдела
+                    ('Елена Зайцева', NULL, NULL, 'Sales'),                           -- Без телефона и email
+                    ('Сергей Котов', '+7 900 888-77-66', 'sergey@company.local', 'IT'),
+                    ('Алексей Новиков', '+7 900 999-88-77', 'alex@company.local', 'HR');";
+                insertCommand.ExecuteNonQuery();
+            }
+        }
+
+        static List<Contact> GetAllContacts()
+        {
+            var contacts = new List<Contact>();
+            using var connection = new SqliteConnection(connectionString);
+            connection.Open();
+
+            using var command = connection.CreateCommand();
+            command.CommandText = "SELECT Id, FullName, Phone, Email, Department FROM Contacts ORDER BY Id;";
+
+            using var reader = command.ExecuteReader();
+            while (reader.Read())
+            {
+                contacts.Add(MapContact(reader));
+            }
+            return contacts;
+        }
+
+        static int AddContact(Contact contact)
+        {
+            using var connection = new SqliteConnection(connectionString);
+            connection.Open();
+
+            using var command = connection.CreateCommand();
+            command.CommandText = @"
+                INSERT INTO Contacts (FullName, Phone, Email, Department)
+                VALUES (@fullName, @phone, @email, @department);";
+
+            command.Parameters.AddWithValue("@fullName", contact.FullName);
+            command.Parameters.AddWithValue("@phone", (object?)contact.Phone ?? DBNull.Value);
+            command.Parameters.AddWithValue("@email", (object?)contact.Email ?? DBNull.Value);
+            command.Parameters.AddWithValue("@department", (object?)contact.Department ?? DBNull.Value);
+
+            return command.ExecuteNonQuery();
+        }
+
+        static int UpdateContact(Contact contact)
+        {
+            using var connection = new SqliteConnection(connectionString);
+            connection.Open();
+
+            using var command = connection.CreateCommand();
+            command.CommandText = @"
+                UPDATE Contacts
+                SET FullName = @fullName, Phone = @phone, Email = @email, Department = @department
+                WHERE Id = @id;";
+
+            command.Parameters.AddWithValue("@id", contact.Id);
+            command.Parameters.AddWithValue("@fullName", contact.FullName);
+            command.Parameters.AddWithValue("@phone", (object?)contact.Phone ?? DBNull.Value);
+            command.Parameters.AddWithValue("@email", (object?)contact.Email ?? DBNull.Value);
+            command.Parameters.AddWithValue("@department", (object?)contact.Department ?? DBNull.Value);
+
+            return command.ExecuteNonQuery();
+        }
+
+        static int DeleteContact(int id)
+        {
+            using var connection = new SqliteConnection(connectionString);
+            connection.Open();
+
+            using var command = connection.CreateCommand();
+            command.CommandText = "DELETE FROM Contacts WHERE Id = @id;";
+            command.Parameters.AddWithValue("@id", id);
+
+            return command.ExecuteNonQuery();
+        }
+
+        static List<Contact> SearchContacts(string searchText, string? department)
+        {
+            var contacts = new List<Contact>();
+            string pattern = $"%{searchText?.Trim()}%";
+
+            using var connection = new SqliteConnection(connectionString);
+            connection.Open();
+
+            using var command = connection.CreateCommand();
+            command.CommandText = @"
+                SELECT Id, FullName, Phone, Email, Department FROM Contacts
+                WHERE (FullName LIKE @pattern OR Email LIKE @pattern)
+                  AND (@department IS NULL OR Department = @department)
+                ORDER BY FullName;";
+
+            command.Parameters.AddWithValue("@pattern", pattern);
+            command.Parameters.AddWithValue("@department", string.IsNullOrWhiteSpace(department) ? DBNull.Value : department);
+
+            using var reader = command.ExecuteReader();
+            while (reader.Read())
+            {
+                contacts.Add(MapContact(reader));
+            }
+            return contacts;
+        }
+
+        static void RunSuccessfulTransaction()
+        {
+            using var connection = new SqliteConnection(connectionString);
+            connection.Open();
+            using var transaction = connection.BeginTransaction();
+
+            try
+            {
+           
+                using var insertContactCmd = connection.CreateCommand();
+                insertContactCmd.Transaction = transaction;
+                insertContactCmd.CommandText = "INSERT INTO Contacts (FullName, Department) VALUES (@fullName, @department);";
+                insertContactCmd.Parameters.AddWithValue("@fullName", "Транзакция Успешна");
+                insertContactCmd.Parameters.AddWithValue("@department", "Finance");
+                insertContactCmd.ExecuteNonQuery();
+
+             
+                using var getIdCmd = connection.CreateCommand();
+                getIdCmd.Transaction = transaction;
+                getIdCmd.CommandText = "SELECT last_insert_rowid();";
+                long newContactId = (long)getIdCmd.ExecuteScalar()!;
+
+        
+                using var insertAuditCmd = connection.CreateCommand();
+                insertAuditCmd.Transaction = transaction;
+                insertAuditCmd.CommandText = "INSERT INTO AuditLog (ContactId, ActionName, Details, CreatedAt) VALUES (@cId, @action, @details, @date);";
+                insertAuditCmd.Parameters.AddWithValue("@cId", newContactId);
+                insertAuditCmd.Parameters.AddWithValue("@action", "CREATE");
+                insertAuditCmd.Parameters.AddWithValue("@details", "Создан через успешную транзакцию");
+                insertAuditCmd.Parameters.AddWithValue("@date", DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"));
+                insertAuditCmd.ExecuteNonQuery();
+
+                transaction.Commit();
+                Console.WriteLine("Транзакция выполнена: Контакт добавлен, запись в AuditLog создана.");
+            }
+            catch (Exception ex)
+            {
+                transaction.Rollback();
+                Console.WriteLine($"Ошибка: {ex.Message}");
+            }
+        }
+
+        static void RunRollbackTransaction()
+        {
+            using var connection = new SqliteConnection(connectionString);
+            connection.Open();
+            using var transaction = connection.BeginTransaction();
+
+            try
+            {
+                using var insertContactCmd = connection.CreateCommand();
+                insertContactCmd.Transaction = transaction;
+                insertContactCmd.CommandText = "INSERT INTO Contacts (FullName, Department) VALUES (@fullName, @department);";
+                insertContactCmd.Parameters.AddWithValue("@fullName", "Контакт для Rollback");
+                insertContactCmd.Parameters.AddWithValue("@department", "QA");
+                insertContactCmd.ExecuteNonQuery();
+
+                
+                throw new InvalidOperationException("Искусственная ошибка для проверки отката!");
+
+              
+
+            }
+            catch (Exception ex)
+            {
+                transaction.Rollback();
+                Console.WriteLine($"Ошибка: '{ex.Message}'.Контакт не добавлен.");
+            }
+        }
+
+        static List<AuditLogEntry> GetAuditLog()
+        {
+            var logs = new List<AuditLogEntry>();
+            using var connection = new SqliteConnection(connectionString);
+            connection.Open();
+
+            using var command = connection.CreateCommand();
+            command.CommandText = "SELECT Id, ContactId, ActionName, Details, CreatedAt FROM AuditLog ORDER BY Id;";
+
+            using var reader = command.ExecuteReader();
+            while (reader.Read())
+            {
+                logs.Add(new AuditLogEntry
+                {
+                    Id = reader.GetInt32(0),
+                    ContactId = reader.GetInt32(1),
+                    ActionName = reader.GetString(2),
+                    Details = reader.GetString(3),
+                    CreatedAt = reader.GetString(4)
+                });
+            }
+            return logs;
+        }
+
+        
+
+        static Contact MapContact(SqliteDataReader reader)
+        {
+            return new Contact
+            {
+                Id = reader.GetInt32(reader.GetOrdinal("Id")),
+                FullName = reader.GetString(reader.GetOrdinal("FullName")),
+                Phone = reader.IsDBNull(reader.GetOrdinal("Phone")) ? null : reader.GetString(reader.GetOrdinal("Phone")),
+                Email = reader.IsDBNull(reader.GetOrdinal("Email")) ? null : reader.GetString(reader.GetOrdinal("Email")),
+                Department = reader.IsDBNull(reader.GetOrdinal("Department")) ? null : reader.GetString(reader.GetOrdinal("Department"))
+            };
+        }
+
+        static void PrintContacts(List<Contact> contacts)
+        {
+            if (contacts.Count == 0)
+            {
+                Console.WriteLine("(список пуст)");
+                return;
+            }
+
+            foreach (var c in contacts)
+            {
+                Console.WriteLine($"{c.Id} | {c.FullName} | {c.Phone ?? "нет телефона"} | {c.Email ?? "нет email"} | {c.Department ?? "без отдела"}");
+            }
+        }
+
+        static void PrintAuditLog(List<AuditLogEntry> logs)
+        {
+            if (logs.Count == 0)
+            {
+                Console.WriteLine("(журнал пуст)");
+                return;
+            }
+
+            foreach (var l in logs)
+            {
+                Console.WriteLine($"{l.Id} | Дата: {l.CreatedAt} | Контакт ID: {l.ContactId} | Действие: {l.ActionName} | {l.Details}");
+            }
+        }
+    }
+}
