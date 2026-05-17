@@ -1,0 +1,289 @@
+// Задание 1
+using System;
+using System.IO;
+using Microsoft.Data.Sqlite;
+
+namespace HelloWorldSample
+{
+    class Program
+    {
+        static void Main()
+        {
+
+
+            File.Delete("hello.db");
+
+
+            CreateAndSeed();
+            Query();
+
+            
+
+        }
+
+        static void CreateAndSeed()
+        {
+            using var connection = new SqliteConnection("Data Source=hello.db");
+
+            connection.Open();
+
+            var command = connection.CreateCommand();
+            command.CommandText = """
+                CREATE TABLE Contacts (
+                    ID INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+                    FullName TEXT NOT NULL,
+                    PhoneNumber TEXT,
+                    Email TEXT,
+                    Department TEXT
+                );
+
+                INSERT INTO Contacts (FullName, PhoneNumber, Email, Department)
+                VALUES 
+                    ('Иванов Иван Иванович', '+79001234567', 'ivanov@company.com', 'IT'),
+                    ('Петров Петр Петрович', NULL, 'petrov@company.com', 'HR'),
+                    ('Сидорова Анна Сергеевна', '+79009876543', 'sidorova@company.com', 'HR'),
+                    ('Смирнов Алексей Викторович', NULL, 'smirnov@company.com', 'Sales'),
+                    ('Кузнецова Мария Александровна', '+79112223344', 'kuznetsova@company.com', 'IT'),
+                    ('Попов Дмитрий Андреевич', NULL, 'popov@company.com', 'HR'),
+                    ('Васильева Елена Игоревна', '+79223334455', 'vasilieva@company.com', 'Marketing'),
+                    ('Соколов Максим Олегович', '+79334445566', 'sokolov@company.com', 'IT'),
+                    ('Михайлова Ольга Владимировна', '+79445556677', 'mikhailova@company.com', 'Sales'),
+                    ('Новиков Андрей Николаевич', NULL, 'novikov@company.com', 'Management');
+            """;
+            command.ExecuteNonQuery();
+
+            
+        }
+
+        static void Query()
+        {
+            using var connection = new SqliteConnection("Data Source=hello.db");
+
+            connection.Open();
+
+
+            using var command1 = connection.CreateCommand();
+            command1.CommandText = "SELECT COUNT(*) FROM Contacts WHERE PhoneNumber IS NULL";
+
+            object? result = command1.ExecuteScalar();
+            int NoPhone = Convert.ToInt32(result);
+
+            Console.WriteLine($"1. Количество пользователей без номера телефона: {NoPhone}");
+
+
+            Console.WriteLine();
+
+
+            using var command2 = connection.CreateCommand();
+            command2.CommandText = "SELECT Email FROM Contacts";
+
+            using var reader = command2.ExecuteReader();
+
+            Console.WriteLine("2. Адреса электронной почты всех сотрудников:");
+
+            while (reader.Read())
+            {
+                var email = reader.GetString(0);
+                Console.WriteLine($" {email}");
+            }
+
+
+            Console.WriteLine();
+
+            using var command3 = connection.CreateCommand();
+            command3.CommandText = "SELECT ID, FullName FROM Contacts WHERE Department = 'HR'";
+
+            using var reader2 = command3.ExecuteReader();
+
+            Console.WriteLine("3. Сотрудники подразделения HR:");
+
+            while (reader2.Read())
+            {
+                var id = reader2.GetString(0);
+                var fullname = reader2.GetString(1);
+                Console.WriteLine($" {id} - {fullname}");
+            }
+
+
+
+        }
+    }
+}
+
+// Задание 2
+using System;
+using System.Collections.Generic;
+using System.IO;
+using Microsoft.Data.Sqlite;
+
+namespace ContactManagerSample
+{
+ 
+    public class Contact
+    {
+        public int Id { get; set; }
+        public string FullName { get; set; } = "";
+        public string? PhoneNumber { get; set; } 
+        public string? Email { get; set; }
+        public string? Department { get; set; }
+    }
+
+    class Program
+    {
+        
+        const string connectionString = "Data Source=contact_manager.db";
+
+        static void Main()
+        {
+            File.Delete("contact_manager.db");
+
+     
+            CreateAndSeed();
+
+   
+            List<Contact> allContacts = GetAllContacts();
+            Console.WriteLine("Все контакты");
+            PrintContacts(allContacts);
+
+            Console.WriteLine("");
+
+        
+            List<Contact> noDepartmentContacts = GetContactsWithoutDepartment();
+            Console.WriteLine("Сотрудники без подразделения");
+            PrintContacts(noDepartmentContacts);
+        }
+
+        static void CreateAndSeed()
+        {
+            using var connection = new SqliteConnection(connectionString);
+            connection.Open();
+
+            var command = connection.CreateCommand();
+            command.CommandText = """
+                CREATE TABLE Contacts (
+                    ID INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+                    FullName TEXT NOT NULL,
+                    PhoneNumber TEXT,
+                    Email TEXT,
+                    Department TEXT
+                );
+
+                INSERT INTO Contacts (FullName, PhoneNumber, Email, Department)
+                VALUES 
+                    ('Иванов Иван Иванович', '+79001234567', 'ivanov@company.com', 'IT'),
+                    ('Петров Петр Петрович', NULL, 'petrov@company.com', 'HR'),
+                    ('Сидорова Анна Сергеевна', '+79009876543', 'sidorova@company.com', 'HR'),
+                    ('Смирнов Алексей Викторович', NULL, 'smirnov@company.com', 'Sales'),
+                    ('Кузнецова Мария Александровна', '+79112223344', 'kuznetsova@company.com', 'IT'),
+                    ('Лебедев Роман Игоревич', '+79998887766', 'lebedev@company.com', NULL),
+                    ('Козлова Елена Дмитриевна', NULL, 'kozlova@company.com', NULL);
+            """;
+            command.ExecuteNonQuery();
+        }
+
+        
+
+        static List<Contact> GetAllContacts()
+        {
+            var contacts = new List<Contact>();
+
+            
+            string connectionString = "Data Source=contact_manager.db;";
+
+            using var connection = new SqliteConnection(connectionString);
+            connection.Open();
+
+            using var command = connection.CreateCommand();
+            command.CommandText = @"
+            SELECT Id, FullName, PhoneNumber, Email, Department
+            FROM Contacts
+            ORDER BY Id";
+
+            using var reader = command.ExecuteReader();
+
+            int idIndex = reader.GetOrdinal("Id");
+            int fullNameIndex = reader.GetOrdinal("FullName");
+            int phoneIndex = reader.GetOrdinal("PhoneNumber");
+            int emailIndex = reader.GetOrdinal("Email");
+            int departmentIndex = reader.GetOrdinal("Department");
+
+            while (reader.Read())
+            {
+                var contact = new Contact
+                {
+                    Id = reader.GetInt32(idIndex),
+                    FullName = reader.GetString(fullNameIndex),
+                    PhoneNumber = reader.IsDBNull(phoneIndex) ? null : reader.GetString(phoneIndex),
+                    Email = reader.IsDBNull(emailIndex) ? null : reader.GetString(emailIndex),
+                    Department = reader.IsDBNull(departmentIndex) ? null : reader.GetString(departmentIndex)
+                };
+
+                contacts.Add(contact);
+            }
+
+            return contacts;
+        }
+
+        static List<Contact> GetContactsWithoutDepartment()
+        {
+            var contacts = new List<Contact>();
+
+            
+
+            string connectionString = "Data Source=contact_manager.db;";
+
+            using var connection = new SqliteConnection(connectionString);
+            connection.Open();
+
+            using var command = connection.CreateCommand();
+            command.CommandText = @"
+            SELECT Id, FullName, PhoneNumber, Email, Department
+            FROM Contacts
+            WHERE Department IS NULL
+            ORDER BY Id";
+
+            using var reader = command.ExecuteReader();
+
+            int idIndex = reader.GetOrdinal("Id");
+            int fullNameIndex = reader.GetOrdinal("FullName");
+            int phoneIndex = reader.GetOrdinal("PhoneNumber");
+            int emailIndex = reader.GetOrdinal("Email");
+            int departmentIndex = reader.GetOrdinal("Department");
+
+            while (reader.Read())
+            {
+                var contact = new Contact
+                {
+                    Id = reader.GetInt32(idIndex),
+                    FullName = reader.GetString(fullNameIndex),
+                    PhoneNumber = reader.IsDBNull(phoneIndex) ? null : reader.GetString(phoneIndex),
+                    Email = reader.IsDBNull(emailIndex) ? null : reader.GetString(emailIndex),
+                    Department = reader.IsDBNull(departmentIndex) ? null : reader.GetString(departmentIndex)
+                };
+
+                contacts.Add(contact);
+            }
+
+            return contacts;
+        }
+
+       
+
+        static void PrintContacts(List<Contact> contacts)
+        {
+            if (contacts.Count == 0)
+            {
+                Console.WriteLine("Список пуст.");
+                return;
+            }
+
+            foreach (var c in contacts)
+            {
+                
+                string dep = c.Department ?? "БЕЗ ОТДЕЛА";
+                string phone = c.PhoneNumber ?? "нет телефона";
+                Console.WriteLine($"{c.Id} | {c.FullName} | {dep} | {phone}");
+            }
+        }
+    }
+}
