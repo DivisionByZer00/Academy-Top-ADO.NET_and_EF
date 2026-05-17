@@ -1,0 +1,187 @@
+using System;
+using System.Data;
+using System.Data.SQLite;
+using System.IO;
+
+namespace DisconnectedAdoNet
+{
+    class Program
+    {
+
+        static readonly string dbPath = Path.Combine(AppContext.BaseDirectory, "departments.db");
+        static readonly string connectionString = $"Data Source={dbPath};Version=3;";
+
+        static void Main()
+        {
+            Console.WriteLine($"Путь к файлу базы данных: {dbPath}");
+            Console.WriteLine(new string('=', 60));
+
+            try
+            {
+                
+                EnsureDatabase();
+
+                using var connection = new SQLiteConnection(connectionString);
+
+                
+                using var adapter = CreateAdapter(connection);
+
+                
+                using var table = LoadDepartments(adapter);
+
+                
+                ShowTable(table, "Исходное состояние");
+
+               
+                DataRow firstRow = table.Rows[0];
+                int idToModify = Convert.ToInt32(firstRow["Id"]);
+                string currentName = firstRow["Name"].ToString();
+                string newName = currentName.EndsWith("*") ? currentName.TrimEnd('*') : currentName + "*";
+                RenameDepartment(table, idToModify, newName);
+
+                
+                AddDepartment(table, "Logistics_" + DateTime.Now.ToString("HHmmss")); 
+
+                
+                DataRow lastRow = table.Rows[table.Rows.Count - 2];
+                int idToDelete = Convert.ToInt32(lastRow["Id"]);
+                DeleteDepartment(table, idToDelete);                    
+
+               
+                ShowTable(table, "локальные изменения");
+
+               
+                int rowsAffected = SaveChanges(adapter, table);
+                Console.WriteLine($"\nСохранение изменения отправлены в БД. Затронуто строк: {rowsAffected}");
+
+              
+                ReloadDepartments();
+
+             
+                PrintConclusion();
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"\nПроизошла ошибка:\n{ex.Message}");
+            }
+        }
+
+        
+
+        static void EnsureDatabase()
+        {
+            using var connection = new SQLiteConnection(connectionString);
+            connection.Open();
+
+            using var createCmd = new SQLiteCommand(@"
+                CREATE TABLE IF NOT EXISTS Departments (
+                    Id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    Name TEXT NOT NULL UNIQUE
+                );", connection);
+            createCmd.ExecuteNonQuery();
+
+            using var countCmd = new SQLiteCommand("SELECT COUNT(*) FROM Departments;", connection);
+            long count = (long)countCmd.ExecuteScalar();
+
+            if (count == 0)
+            {
+                using var insertCmd = new SQLiteCommand(@"
+                    INSERT INTO Departments (Name) VALUES 
+                    ('IT'), 
+                    ('HR'), 
+                    ('Finance'), 
+                    ('Sales'), 
+                    ('Marketing');", connection);
+                insertCmd.ExecuteNonQuery();
+            }
+        }
+
+        static SQLiteDataAdapter CreateAdapter(SQLiteConnection connection)
+        {
+            var adapter = new SQLiteDataAdapter("SELECT Id, Name FROM Departments ORDER BY Id", connection);
+            
+            adapter.MissingSchemaAction = MissingSchemaAction.AddWithKey;
+            return adapter;
+        }
+
+        static DataTable LoadDepartments(SQLiteDataAdapter adapter)
+        {
+            var table = new DataTable("Departments");
+            adapter.Fill(table);
+            return table;
+        }
+
+        static void ShowTable(DataTable table, string title)
+        {
+            Console.WriteLine($"\n--- {title} ---");
+            Console.WriteLine($"{"Id",-5} | {"Name",-25} | {"RowState"}");
+            Console.WriteLine(new string('-', 50));
+
+            foreach (DataRow row in table.Rows)
+            {
+                
+                if (row.RowState == DataRowState.Deleted)
+                {
+                    Console.WriteLine($"{row["Id", DataRowVersion.Original],-5} | {row["Name", DataRowVersion.Original],-25} | {row.RowState}");
+                }
+                else
+                {
+                    
+                    Console.WriteLine($"{row["Id"],-5} | {row["Name"],-25} | {row.RowState}");
+                }
+            }
+        }
+
+        static void RenameDepartment(DataTable table, int id, string newName)
+        {
+            var row = table.Rows.Find(id); 
+            if (row != null)
+            {
+                row["Name"] = newName;
+            }
+        }
+
+        static void AddDepartment(DataTable table, string name)
+        {
+            var newRow = table.NewRow();
+            newRow["Name"] = name;
+            table.Rows.Add(newRow);
+        }
+
+        static void DeleteDepartment(DataTable table, int id)
+        {
+            var row = table.Rows.Find(id);
+            if (row != null)
+            {
+                row.Delete(); 
+            }
+        }
+
+        static int SaveChanges(SQLiteDataAdapter adapter, DataTable table)
+        {
+            
+            using var builder = new SQLiteCommandBuilder(adapter);
+
+           
+            return adapter.Update(table);
+        }
+
+        static void ReloadDepartments()
+        {
+            using var connection = new SQLiteConnection(connectionString);
+            using var adapter = CreateAdapter(connection);
+            using var newTable = LoadDepartments(adapter);
+
+            ShowTable(newTable, "Итоговое состояние");
+        }
+
+        static void PrintConclusion()
+        {
+            Console.WriteLine("\n=== ВЫВОД ===");
+            Console.WriteLine("Подход DataTable + CommandBuilder отлично подходит для простых таблиц без сложной бизнес-логики,");
+    
+            Console.WriteLine("Если приложение работает с объектной моделью, связями между сущностями,");
+            Console.WriteLine("навигациями, миграциями и LINQ-запросами, удобнее использовать Entity Framework Core.");
+        }
+    }
+}
